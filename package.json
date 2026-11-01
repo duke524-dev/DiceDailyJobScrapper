@@ -1,0 +1,18 @@
+{
+  "name": "dicebot",
+  "version": "1.0.0",
+  "description": "Scrape daily Dice job postings with Playwright",
+  "type": "module",
+  "main": "src/scrape.js",
+  "scripts": {
+    "start": "node src/scrape.js",
+    "scrape": "node src/scrape.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true,
+  "dependencies": {
+    "playwright": "^1.64.1"
+  }
+}
