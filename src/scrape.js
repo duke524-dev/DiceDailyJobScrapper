@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 import { chromium } from "playwright";
 import { dedupeJobs } from "./dedupe.js";
 import { todayStamp, writeCsv } from "./writeCsv.js";
@@ -7,8 +8,35 @@ import { todayStamp, writeCsv } from "./writeCsv.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
-const BASE_SEARCH_URL =
-  "https://www.dice.com/jobs?filters.postedDate=ONE&filters.employerType=Direct+Hire&filters.workplaceTypes=Remote&q=developer";
+dotenv.config({ path: path.join(ROOT, ".env") });
+
+/**
+ * Build the Dice search URL from .env pieces.
+ * Set any of: DICE_JOBS_PATH, DICE_QUERY, DICE_POSTED_DATE,
+ * DICE_EMPLOYER_TYPE, DICE_WORKPLACE_TYPES, DICE_LOCATION
+ */
+function buildBaseSearchUrl() {
+  const jobsPath = process.env.DICE_JOBS_PATH || "https://www.dice.com/jobs";
+  const url = new URL(jobsPath);
+
+  const query = process.env.DICE_QUERY?.trim();
+  const postedDate = process.env.DICE_POSTED_DATE?.trim();
+  const employerType = process.env.DICE_EMPLOYER_TYPE?.trim();
+  const workplaceTypes = process.env.DICE_WORKPLACE_TYPES?.trim();
+  const location = process.env.DICE_LOCATION?.trim();
+
+  if (query) url.searchParams.set("q", query);
+  if (postedDate) url.searchParams.set("filters.postedDate", postedDate);
+  if (employerType) url.searchParams.set("filters.employerType", employerType);
+  if (workplaceTypes) {
+    url.searchParams.set("filters.workplaceTypes", workplaceTypes);
+  }
+  if (location) url.searchParams.set("location", location);
+
+  return url.toString();
+}
+
+const BASE_SEARCH_URL = buildBaseSearchUrl();
 
 const PAGE_LOAD_TIMEOUT_MS = 60_000;
 const MAX_PAGES = 50;
