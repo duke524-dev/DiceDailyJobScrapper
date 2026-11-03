@@ -65,6 +65,60 @@ function toAbsoluteUrl(href) {
 }
 
 /**
+ * Prefer /job-detail/{id}. /direct-apply/{id} redirects off Dice and has no JD.
+ * @param {string} href
+ */
+function toJobDetailUrl(href) {
+  const absolute = toAbsoluteUrl(href);
+  if (!absolute) return "";
+  try {
+    const url = new URL(absolute);
+    const match = url.pathname.match(
+      /^\/(?:direct-apply|job-detail)\/([0-9a-f-]{36})\/?$/i
+    );
+    if (match) {
+      return `https://www.dice.com/job-detail/${match[1]}`;
+    }
+    return absolute;
+  } catch {
+    return absolute;
+  }
+}
+
+/**
+ * Normalize scraped description text.
+ * @param {string} text
+ */
+function cleanDescription(text) {
+  return String(text ?? "")
+    .trim()
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+/**
+ * Strip HTML from JSON-LD job description values.
+ * @param {string} html
+ */
+function stripHtml(html) {
+  return String(html ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+/**
  * @param {import('playwright').Page} page
  */
 async function dismissOverlays(page) {
@@ -124,7 +178,8 @@ async function extractJobsFromCards(page) {
         const companyEl = card.querySelector('[data-testid="job-card-company-name"]');
         const linkEl =
           card.querySelector('[data-testid="job-search-job-card-link"]') ||
-          card.querySelector('a[href*="/job-detail/"]');
+          card.querySelector('a[href*="/job-detail/"]') ||
+          card.querySelector('a[href*="/direct-apply/"]');
 
         const role = (roleEl?.textContent || roleEl?.getAttribute("aria-label") || "")
           .trim()
@@ -144,7 +199,7 @@ async function extractJobsFromCards(page) {
     .then((jobs) =>
       jobs.map((j) => ({
         ...j,
-        url: toAbsoluteUrl(j.url),
+        url: toJobDetailUrl(j.url),
         description: "",
       }))
     );
@@ -228,12 +283,14 @@ async function hasNextPage(page, pageNum, jobsOnPage) {
 
 /**
  * Fetch job description from the dedicated job-detail page.
+ * Tries DOM selectors first, then JSON-LD structured data.
  * @param {import('playwright').Page} page
  * @param {string} jobUrl
  * @returns {Promise<string>}
  */
 async function fetchDescription(page, jobUrl) {
-  await page.goto(jobUrl, {
+  const detailUrl = toJobDetailUrl(jobUrl);
+  await page.goto(detailUrl, {
     waitUntil: "domcontentloaded",
     timeout: PAGE_LOAD_TIMEOUT_MS,
   });
@@ -251,12 +308,42 @@ async function fetchDescription(page, jobUrl) {
     await page.waitForTimeout(250);
   }
 
-  const text = await descLocator.innerText().catch(() => "");
-  return text
-    .trim()
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n");
+  let text = await descLocator.innerText().catch(() => "");
+  if (text.trim().length > 40) return cleanDescription(text);
+
+  // Fallback: full "Job Details" card (skills + summary + body).
+  text = await page
+    .evaluate(() => {
+      for (const h of document.querySelectorAll("h2")) {
+        if (!/^\s*Job Details\s*$/i.test(h.textContent || "")) continue;
+        const card =
+          h.closest("div[class*='rounded-3xl']") ||
+          h.parentElement?.parentElement ||
+          h.parentElement;
+        return (card?.innerText || "").trim();
+      }
+      return "";
+    })
+    .catch(() => "");
+  if (text.trim().length > 40) return cleanDescription(text);
+
+  // Fallback: schema.org JobPosting description in page JSON-LD.
+  text = await page
+    .evaluate(() => {
+      const script = document.querySelector(
+        '#jobDetailStructuredData, [data-testid="jobDetailStructuredData"]'
+      );
+      if (!script?.textContent) return "";
+      try {
+        const data = JSON.parse(script.textContent);
+        return String(data.description || "");
+      } catch {
+        return "";
+      }
+    })
+    .catch(() => "");
+
+  return cleanDescription(stripHtml(text));
 }
 
 /**
